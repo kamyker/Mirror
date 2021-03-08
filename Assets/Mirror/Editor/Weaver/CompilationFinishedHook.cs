@@ -84,7 +84,18 @@ namespace Mirror.Weaver
 
         static bool CompilerMessagesContainError(CompilerMessage[] messages)
         {
-            return messages.Any(msg => msg.type == CompilerMessageType.Error);
+            foreach ( var msg in messages )
+            {
+                if ( msg.type == CompilerMessageType.Error )
+                {
+                    if ( !msg.message.Contains( "was programmatically suppressed by a DiagnosticSuppressor" ) )
+                    {
+                        Debug.LogError( msg.message );
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         static void OnCompilationFinished(string assemblyPath, CompilerMessage[] messages)
