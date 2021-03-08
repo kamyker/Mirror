@@ -144,8 +144,11 @@ namespace Mirror
             // breaking other custom system's custom loops. Let's use Default
             // for now until we upgrade to 2019 so we have the same behaviour
             // at all times (instead of different loop behavior on 2018/2019)
+#if UNITY_2019_1_OR_NEWER
+            PlayerLoopSystem playerLoop = PlayerLoop.GetCurrentPlayerLoop();
+#else 
             PlayerLoopSystem playerLoop = PlayerLoop.GetDefaultPlayerLoop();
-
+#endif
             // add NetworkEarlyUpdate to the end of EarlyUpdate so it runs after
             // any Unity initializations but before the first Update/FixedUpdate
             AddToPlayerLoop(NetworkEarlyUpdate, typeof(NetworkLoop), ref playerLoop, typeof(EarlyUpdate), AddMode.End);
