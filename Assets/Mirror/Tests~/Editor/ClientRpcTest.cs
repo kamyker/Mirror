@@ -1,5 +1,6 @@
 using System;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace Mirror.Tests.RemoteAttrributeTest
 {
@@ -25,12 +26,45 @@ namespace Mirror.Tests.RemoteAttrributeTest
         }
     }
 
+    class AbstractNetworkBehaviourClientRpcBehaviour : NetworkBehaviour
+    {
+        public abstract class MockMonsterBase : NetworkBehaviour
+        {
+            public abstract string GetName();
+        }
+
+        public class MockZombie : MockMonsterBase
+        {
+            public override string GetName()
+            {
+                return "Zombie";
+            }
+        }
+
+        public class MockWolf : MockMonsterBase
+        {
+            public override string GetName()
+            {
+                return "Wolf";
+            }
+        }
+
+        public event Action<MockMonsterBase> onSendMonsterBase;
+
+        [ClientRpc]
+        public void RpcSendMonster(MockMonsterBase someMonster)
+        {
+            onSendMonsterBase?.Invoke(someMonster);
+        }
+    }
+
     public class ClientRpcTest : RemoteTestBase
     {
         [Test]
         public void RpcIsCalled()
         {
-            ClientRpcBehaviour hostBehaviour = CreateHostObject<ClientRpcBehaviour>(true);
+            // spawn with owner
+            CreateNetworkedAndSpawn(out GameObject _, out NetworkIdentity _, out ClientRpcBehaviour hostBehaviour, NetworkServer.localConnection);
 
             const int someInt = 20;
 
@@ -46,10 +80,10 @@ namespace Mirror.Tests.RemoteAttrributeTest
         }
 
         [Test]
-        public void RpcIsCalledForNotOwnerd()
+        public void RpcIsCalledForNotOwner()
         {
-            bool owner = false;
-            ExcludeOwnerBehaviour hostBehaviour = CreateHostObject<ExcludeOwnerBehaviour>(owner);
+            // spawn without owner
+            CreateNetworkedAndSpawn(out GameObject _, out NetworkIdentity _, out ExcludeOwnerBehaviour hostBehaviour);
 
             const int someInt = 20;
 
@@ -65,10 +99,10 @@ namespace Mirror.Tests.RemoteAttrributeTest
         }
 
         [Test]
-        public void RpcNotCalledForOwnerd()
+        public void RpcNotCalledForOwner()
         {
-            bool owner = true;
-            ExcludeOwnerBehaviour hostBehaviour = CreateHostObject<ExcludeOwnerBehaviour>(owner);
+            // spawn with owner
+            CreateNetworkedAndSpawn(out GameObject _, out NetworkIdentity _, out ExcludeOwnerBehaviour hostBehaviour, NetworkServer.localConnection);
 
             const int someInt = 20;
 
@@ -81,6 +115,36 @@ namespace Mirror.Tests.RemoteAttrributeTest
             hostBehaviour.RpcSendInt(someInt);
             ProcessMessages();
             Assert.That(callCount, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void RpcIsCalledWithAbstractNetworkBehaviourParameter()
+        {
+            // spawn with owner
+            CreateNetworkedAndSpawn(out GameObject _, out NetworkIdentity _, out AbstractNetworkBehaviourClientRpcBehaviour hostBehaviour, NetworkServer.localConnection);
+
+            // spawn clientrpc parameter targets
+            CreateNetworkedAndSpawn(out GameObject _, out NetworkIdentity wolfIdentity, out AbstractNetworkBehaviourClientRpcBehaviour.MockWolf wolf, NetworkServer.localConnection);
+            CreateNetworkedAndSpawn(out GameObject _, out NetworkIdentity zombieIdentity, out AbstractNetworkBehaviourClientRpcBehaviour.MockZombie zombie, NetworkServer.localConnection);
+
+            AbstractNetworkBehaviourClientRpcBehaviour.MockMonsterBase currentMonster = null;
+
+            int callCount = 0;
+            hostBehaviour.onSendMonsterBase += incomingMonster =>
+            {
+                callCount++;
+                Assert.That(incomingMonster, Is.EqualTo(currentMonster));
+            };
+
+            currentMonster = wolf;
+            hostBehaviour.RpcSendMonster(currentMonster);
+            ProcessMessages();
+            Assert.That(callCount, Is.EqualTo(1));
+
+            currentMonster = zombie;
+            hostBehaviour.RpcSendMonster(currentMonster);
+            ProcessMessages();
+            Assert.That(callCount, Is.EqualTo(2));
         }
     }
 }

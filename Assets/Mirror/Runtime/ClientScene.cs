@@ -6,6 +6,8 @@ using Guid = System.Guid;
 
 namespace Mirror
 {
+    // Deprecated 2021-03-07
+    [Obsolete("Use NetworkClient instead")]
     public static class ClientScene
     {
         [Obsolete("ClientScene.localPlayer was moved to NetworkClient.localPlayer")]
@@ -26,7 +28,7 @@ namespace Mirror
         public static NetworkConnection readyConnection
         {
             get { return NetworkClient.readyConnection; }
-            set { NetworkClient.readyConnection = value; }
+            set { NetworkClient.connection = value; }
         }
 
         [Obsolete("ClientScene.prefabs was moved to NetworkClient.prefabs")]
