@@ -14,6 +14,12 @@ namespace Mirror
         public bool IsReadOnly { get; private set; }
         public event SyncSetChanged Callback;
 
+        // OnDirty sets owner NetworkBehaviour's dirty mask when changed.
+        public Action OnDirty { get; set; }
+
+        // used to stop recording ever growing changes while we have no observers
+        public Func<bool> IsRecording { get; set; } = () => true;
+
         public enum Operation : byte
         {
             OP_ADD,
@@ -27,7 +33,13 @@ namespace Mirror
             internal T item;
         }
 
+        // list of changes.
+        // -> insert/delete/clear is only ONE change
+        // -> changing the same slot 10x caues 10 changes.
+        // -> note that this grows until next sync(!)
+        // TODO Dictionary<key, change> to avoid ever growing changes / redundant changes!
         readonly List<Change> changes = new List<Change>();
+
         // how many changes we need to ignore
         // this is needed because when we initialize the list,
         // we might later receive changes that have already been applied
@@ -47,10 +59,12 @@ namespace Mirror
             objects.Clear();
         }
 
-        public bool IsDirty => changes.Count > 0;
-
         // throw away all the changes
         // this should be called after a successful sync
+        public void ClearChanges() => changes.Clear();
+
+        // Deprecated 2021-09-17
+        [Obsolete("Deprecated: Use ClearChanges instead.")]
         public void Flush() => changes.Clear();
 
         void AddOperation(Operation op, T item)
@@ -66,7 +80,11 @@ namespace Mirror
                 item = item
             };
 
-            changes.Add(change);
+            if (IsRecording())
+            {
+                changes.Add(change);
+                OnDirty?.Invoke();
+            }
 
             Callback?.Invoke(op, item);
         }

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
-using Mirror.RemoteCalls;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -401,7 +400,7 @@ namespace Mirror.Tests
         }
 
         [Test]
-        public void RemoveObserverInternal()
+        public void RemoveObserver()
         {
             CreateNetworked(out GameObject _, out NetworkIdentity identity);
 
@@ -412,12 +411,12 @@ namespace Mirror.Tests
             NetworkConnectionToClient connection = new NetworkConnectionToClient(42);
             identity.observers[connection.connectionId] = connection;
 
-            // RemoveObserverInternal with invalid connection should do nothing
-            identity.RemoveObserverInternal(new NetworkConnectionToClient(43));
+            // RemoveObserver with invalid connection should do nothing
+            identity.RemoveObserver(new NetworkConnectionToClient(43));
             Assert.That(identity.observers.Count, Is.EqualTo(1));
 
-            // RemoveObserverInternal with existing connection should remove it
-            identity.RemoveObserverInternal(connection);
+            // RemoveObserver with existing connection should remove it
+            identity.RemoveObserver(connection);
             Assert.That(identity.observers.Count, Is.EqualTo(0));
         }
 
@@ -607,12 +606,6 @@ namespace Mirror.Tests
             Assert.That(callbackIdentity, Is.EqualTo(identity));
             Assert.That(callbackState, Is.EqualTo(true));
 
-            // assigning authority should respawn the object with proper authority
-            // on the client. that's the best way to sync the new state right now.
-            // process pending messages
-            owner.connectionToServer.Update();
-            Assert.That(spawnCalled, Is.EqualTo(1));
-
             // shouldn't be able to assign authority while already owned by
             // another connection
             // error log is expected
@@ -694,7 +687,7 @@ namespace Mirror.Tests
             // set it to false, should call OnStopAuthority
             identity.hasAuthority = false;
             identity.NotifyAuthority();
-            // shouldn't be touched
+            // should be changed
             Assert.That(identity.hasAuthority, Is.False);
             // same as before
             Assert.That(compStart.called, Is.EqualTo(1));
@@ -739,101 +732,6 @@ namespace Mirror.Tests
         }
 
         [Test]
-        public void OnSerializeAndDeserializeAllSafely()
-        {
-            CreateNetworked(out GameObject _, out NetworkIdentity identity,
-                out SerializeTest1NetworkBehaviour comp1,
-                out SerializeExceptionNetworkBehaviour compExc,
-                out SerializeTest2NetworkBehaviour comp2);
-
-            // set some unique values to serialize
-            comp1.value = 12345;
-            comp1.syncMode = SyncMode.Observers;
-            compExc.syncMode = SyncMode.Observers;
-            comp2.value = "67890";
-            comp2.syncMode = SyncMode.Owner;
-
-            // serialize all - should work even if compExc throws an exception
-            NetworkWriter ownerWriter = new NetworkWriter();
-            NetworkWriter observersWriter = new NetworkWriter();
-            // error log because of the exception is expected
-            LogAssert.ignoreFailingMessages = true;
-            identity.OnSerializeAllSafely(true, ownerWriter, out int ownerWritten, observersWriter, out int observersWritten);
-            LogAssert.ignoreFailingMessages = false;
-
-            // owner should have written all components
-            Assert.That(ownerWritten, Is.EqualTo(3));
-
-            // observers should have written only the observers components
-            Assert.That(observersWritten, Is.EqualTo(2));
-
-            // reset component values
-            comp1.value = 0;
-            comp2.value = null;
-
-            // deserialize all for owner - should work even if compExc throws an exception
-            NetworkReader reader = new NetworkReader(ownerWriter.ToArray());
-            // error log because of the exception is expected
-            LogAssert.ignoreFailingMessages = true;
-            identity.OnDeserializeAllSafely(reader, true);
-            LogAssert.ignoreFailingMessages = false;
-            Assert.That(comp1.value, Is.EqualTo(12345));
-            Assert.That(comp2.value, Is.EqualTo("67890"));
-
-            // reset component values
-            comp1.value = 0;
-            comp2.value = null;
-
-            // deserialize all for observers - should work even if compExc throws an exception
-            reader = new NetworkReader(observersWriter.ToArray());
-            // error log because of the exception is expected
-            LogAssert.ignoreFailingMessages = true;
-            identity.OnDeserializeAllSafely(reader, true);
-            LogAssert.ignoreFailingMessages = false;
-            // observers mode, should be in data
-            Assert.That(comp1.value, Is.EqualTo(12345));
-            // owner mode, should not be in data
-            Assert.That(comp2.value, Is.EqualTo(null));
-        }
-
-        // OnSerializeAllSafely supports at max 64 components, because our
-        // dirty mask is ulong and can only handle so many bits.
-        [Test]
-        public void OnSerializeAllSafelyShouldNotLogErrorsForTooManyComponents()
-        {
-            CreateNetworked(out GameObject gameObject, out NetworkIdentity identity);
-
-            // add 65 components
-            for (int i = 0; i < 65; ++i)
-            {
-                gameObject.AddComponent<SerializeTest1NetworkBehaviour>();
-            }
-
-            // CreateNetworked already initializes the components.
-            // let's reset and initialize again with the added ones.
-            identity.Reset();
-            identity.Awake();
-
-            // ignore error from creating cache (has its own test)
-            LogAssert.ignoreFailingMessages = true;
-            _ = identity.NetworkBehaviours;
-            LogAssert.ignoreFailingMessages = false;
-
-
-            // try to serialize
-            NetworkWriter ownerWriter = new NetworkWriter();
-            NetworkWriter observersWriter = new NetworkWriter();
-
-            identity.OnSerializeAllSafely(true, ownerWriter, out int ownerWritten, observersWriter, out int observersWritten);
-
-            // Should still write with too mnay Components because NetworkBehavioursCache should handle the error
-            Assert.That(ownerWriter.Position, Is.GreaterThan(0));
-            Assert.That(observersWriter.Position, Is.GreaterThan(0));
-            Assert.That(ownerWritten, Is.GreaterThan(0));
-            Assert.That(observersWritten, Is.GreaterThan(0));
-        }
-
-        [Test]
         public void CreatingNetworkBehavioursCacheShouldLogErrorForTooComponents()
         {
             CreateNetworked(out GameObject gameObject, out NetworkIdentity identity);
@@ -852,45 +750,6 @@ namespace Mirror.Tests
             // call NetworkBehaviours property to create the cache
             LogAssert.Expect(LogType.Error, new Regex($"Only {byte.MaxValue} NetworkBehaviour components are allowed for NetworkIdentity.+"));
             _ = identity.NetworkBehaviours;
-        }
-
-        // OnDeserializeSafely should be able to detect and handle serialization
-        // mismatches (= if compA writes 10 bytes but only reads 8 or 12, it
-        // shouldn't break compB's serialization. otherwise we end up with
-        // insane runtime errors like monsters that look like npcs. that's what
-        // happened back in the day with UNET).
-        [Test]
-        public void OnDeserializeSafelyShouldDetectAndHandleDeSerializationMismatch()
-        {
-            CreateNetworked(out GameObject _, out NetworkIdentity identity,
-                out SerializeTest1NetworkBehaviour comp1,
-                out SerializeMismatchNetworkBehaviour compMiss,
-                out SerializeTest2NetworkBehaviour comp2);
-
-            // set some unique values to serialize
-            comp1.value = 12345;
-            comp2.value = "67890";
-
-            // serialize
-            NetworkWriter ownerWriter = new NetworkWriter();
-            NetworkWriter observersWriter = new NetworkWriter();
-            identity.OnSerializeAllSafely(true, ownerWriter, out int ownerWritten, observersWriter, out int observersWritten);
-
-            // reset component values
-            comp1.value = 0;
-            comp2.value = null;
-
-            // deserialize all
-            NetworkReader reader = new NetworkReader(ownerWriter.ToArray());
-            // warning log because of serialization mismatch
-            LogAssert.ignoreFailingMessages = true;
-            identity.OnDeserializeAllSafely(reader, true);
-            LogAssert.ignoreFailingMessages = false;
-
-            // the mismatch component will fail, but the one before and after
-            // should still work fine. that's the whole point.
-            Assert.That(comp1.value, Is.EqualTo(12345));
-            Assert.That(comp2.value, Is.EqualTo("67890"));
         }
 
         [Test]
@@ -1049,8 +908,8 @@ namespace Mirror.Tests
             compB.syncInterval = Mathf.Infinity;
 
             // set components dirty bits
-            compA.SetDirtyBit(0x0001);
-            compB.SetDirtyBit(0x1001);
+            compA.SetSyncVarDirtyBit(0x0001);
+            compB.SetSyncVarDirtyBit(0x1001);
             // dirty because interval reached and mask != 0
             Assert.That(compA.IsDirty(), Is.True);
             // not dirty because syncinterval not reached
@@ -1081,8 +940,8 @@ namespace Mirror.Tests
             compB.syncInterval = Mathf.Infinity;
 
             // set components dirty bits
-            compA.SetDirtyBit(0x0001);
-            compB.SetDirtyBit(0x1001);
+            compA.SetSyncVarDirtyBit(0x0001);
+            compB.SetSyncVarDirtyBit(0x1001);
             // dirty because interval reached and mask != 0
             Assert.That(compA.IsDirty(), Is.True);
             // not dirty because syncinterval not reached
@@ -1129,43 +988,7 @@ namespace Mirror.Tests
         [Test, Ignore("NetworkServerTest.SendCommand does it already")]
         public void HandleCommand() {}
 
-        [Test]
-        public void HandleRpc()
-        {
-            CreateNetworked(out GameObject _, out NetworkIdentity identity, out RpcTestNetworkBehaviour comp0);
-
-            // register the command delegate, otherwise it's not found
-            int registeredHash = RemoteCallHelper.RegisterDelegate(typeof(RpcTestNetworkBehaviour),
-                nameof(RpcTestNetworkBehaviour.RpcGenerated),
-                MirrorInvokeType.ClientRpc,
-                RpcTestNetworkBehaviour.RpcGenerated);
-
-            // identity needs to be in spawned dict, otherwise command handler
-            // won't find it
-            NetworkIdentity.spawned[identity.netId] = identity;
-
-            // call HandleRpc and check if the rpc was called in the component
-            int functionHash = RemoteCallHelper.GetMethodHash(typeof(RpcTestNetworkBehaviour), nameof(RpcTestNetworkBehaviour.RpcGenerated));
-            NetworkReader payload = new NetworkReader(new byte[0]);
-            identity.HandleRemoteCall(0, functionHash, MirrorInvokeType.ClientRpc, payload);
-            Assert.That(comp0.called, Is.EqualTo(1));
-
-            // try wrong component index. rpc shouldn't be called again.
-            // warning is expected
-            LogAssert.ignoreFailingMessages = true;
-            identity.HandleRemoteCall(1, functionHash, MirrorInvokeType.ClientRpc, payload);
-            LogAssert.ignoreFailingMessages = false;
-            Assert.That(comp0.called, Is.EqualTo(1));
-
-            // try wrong function hash. rpc shouldn't be called again.
-            // warning is expected
-            LogAssert.ignoreFailingMessages = true;
-            identity.HandleRemoteCall(0, functionHash + 1, MirrorInvokeType.ClientRpc, payload);
-            LogAssert.ignoreFailingMessages = false;
-            Assert.That(comp0.called, Is.EqualTo(1));
-
-            // clean up
-            RemoteCallHelper.RemoveDelegate(registeredHash);
-        }
+        [Test, Ignore("RpcTests do it already")]
+        public void HandleRpc() {}
     }
 }

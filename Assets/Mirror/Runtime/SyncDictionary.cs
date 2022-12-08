@@ -1,6 +1,6 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
-using JetBrains.Annotations;
 
 namespace Mirror
 {
@@ -13,6 +13,12 @@ namespace Mirror
         public int Count => objects.Count;
         public bool IsReadOnly { get; private set; }
         public event SyncDictionaryChanged Callback;
+
+        // OnDirty sets owner NetworkBehaviour's dirty mask when changed.
+        public Action OnDirty { get; set; }
+
+        // used to stop recording ever growing changes while we have no observers
+        public Func<bool> IsRecording { get; set; } = () => true;
 
         public enum Operation : byte
         {
@@ -29,7 +35,13 @@ namespace Mirror
             internal TValue item;
         }
 
+        // list of changes.
+        // -> insert/delete/clear is only ONE change
+        // -> changing the same slot 10x caues 10 changes.
+        // -> note that this grows until next sync(!)
+        // TODO Dictionary<key, change> to avoid ever growing changes / redundant changes!
         readonly List<Change> changes = new List<Change>();
+
         // how many changes we need to ignore
         // this is needed because when we initialize the list,
         // we might later receive changes that have already been applied
@@ -44,8 +56,6 @@ namespace Mirror
             objects.Clear();
         }
 
-        public bool IsDirty => changes.Count > 0;
-
         public ICollection<TKey> Keys => objects.Keys;
 
         public ICollection<TValue> Values => objects.Values;
@@ -56,6 +66,10 @@ namespace Mirror
 
         // throw away all the changes
         // this should be called after a successful sync
+        public void ClearChanges() => changes.Clear();
+
+        // Deprecated 2021-09-17
+        [Obsolete("Deprecated: Use ClearChanges instead.")]
         public void Flush() => changes.Clear();
 
         public SyncIDictionary(IDictionary<TKey, TValue> objects)
@@ -77,7 +91,11 @@ namespace Mirror
                 item = item
             };
 
-            changes.Add(change);
+            if (IsRecording())
+            {
+                changes.Add(change);
+                OnDirty?.Invoke();
+            }
 
             Callback?.Invoke(op, key, item);
         }
@@ -257,7 +275,7 @@ namespace Mirror
             return TryGetValue(item.Key, out TValue val) && EqualityComparer<TValue>.Default.Equals(val, item.Value);
         }
 
-        public void CopyTo([NotNull] KeyValuePair<TKey, TValue>[] array, int arrayIndex)
+        public void CopyTo(KeyValuePair<TKey, TValue>[] array, int arrayIndex)
         {
             if (arrayIndex < 0 || arrayIndex > array.Length)
             {
@@ -295,9 +313,9 @@ namespace Mirror
     {
         public SyncDictionary() : base(new Dictionary<TKey, TValue>()) {}
         public SyncDictionary(IEqualityComparer<TKey> eq) : base(new Dictionary<TKey, TValue>(eq)) {}
+        public SyncDictionary(IDictionary<TKey, TValue> d) : base(new Dictionary<TKey, TValue>(d)) {}
         public new Dictionary<TKey, TValue>.ValueCollection Values => ((Dictionary<TKey, TValue>)objects).Values;
         public new Dictionary<TKey, TValue>.KeyCollection Keys => ((Dictionary<TKey, TValue>)objects).Keys;
         public new Dictionary<TKey, TValue>.Enumerator GetEnumerator() => ((Dictionary<TKey, TValue>)objects).GetEnumerator();
-
     }
 }

@@ -28,9 +28,18 @@ namespace Mirror.Tests
             Assert.That(index, Is.EqualTo(0));
             Assert.That(largest, Is.EqualTo(Mathf.Abs(value.x)));
             Assert.That(withoutLargest, Is.EqualTo(new Vector3(value.y, value.z, value.w)));
+
+            // test to guarantee it uses 'abs' for first value
+            // to reproduce https://github.com/vis2k/Mirror/issues/2674
+            // IF all values are properly 'abs', THEN first one should be largest
+            value = new Vector4(-3, 0, 1, 2);
+            index = Compression.LargestAbsoluteComponentIndex(value, out largest, out withoutLargest);
+            Assert.That(index, Is.EqualTo(0));
+            Assert.That(largest, Is.EqualTo(Mathf.Abs(value.x)));
+            Assert.That(withoutLargest, Is.EqualTo(new Vector3(value.y, value.z, value.w)));
         }
 
-        [Test]
+        [Test, Ignore("Enable when needed.")]
         public void LargestAbsoluteComponentIndexBenchmark()
         {
             Vector4 value = new Vector4(1, 2, 3, 4);
@@ -74,6 +83,45 @@ namespace Mirror.Tests
             Assert.That(decompressed.w, Is.EqualTo(value.w).Within(0.005f));
         }
 
+        // iterate all [0..360] euler angles for x, y, z
+        // to make sure it all works and we missed nothing.
+        [Test]
+        public void CompressAndDecompressQuaternion_Iterate_0_to_360()
+        {
+            // stepSize  1: 360 * 360 * 360 =  46 million  [takes 96 s]
+            // stepSize  5:  72 *  72 *  72 = 373 thousand [takes 700 ms]
+            // stepSize 10:  36 *  36 *  36 =  46 thousand [takes 100 ms]
+            //
+            // => 10 is enough. 700ms accumulates in hours of time waited over
+            //    the years..
+            const int stepSize = 10;
+
+            for (int x = 0; x <= 360; x += stepSize)
+            {
+                for (int y = 0; y <= 360; y += stepSize)
+                {
+                    for (int z = 0; z <= 360; z += stepSize)
+                    {
+                        // we need a normalized value
+                        Quaternion value = Quaternion.Euler(x, y, z).normalized;
+
+                        // compress
+                        uint data = Compression.CompressQuaternion(value);
+
+                        // decompress
+                        Quaternion decompressed = Compression.DecompressQuaternion(data);
+
+                        // compare them. Quaternion.Angle is easiest to get the angle
+                        // between them. using .eulerAngles would give 0, 90, 360 which is
+                        // hard to compare.
+                        float angle = Quaternion.Angle(value, decompressed);
+                        // 1 degree tolerance
+                        Assert.That(Mathf.Abs(angle), Is.LessThanOrEqualTo(1));
+                    }
+                }
+            }
+        }
+
         // someone mentioned issues with 90 degree euler becoming -90 degree
         [Test]
         public void CompressAndDecompressQuaternion_90DegreeEuler()
@@ -90,7 +138,32 @@ namespace Mirror.Tests
             // compare them. Quaternion.Angle is easiest to get the angle
             // between them. using .eulerAngles would give 0, 90, 360 which is
             // hard to compare.
-            Debug.Log("euler=" + decompressed.eulerAngles);
+            Debug.Log($"euler={decompressed.eulerAngles}");
+            float angle = Quaternion.Angle(value, decompressed);
+            // 1 degree tolerance
+            Assert.That(Mathf.Abs(angle), Is.LessThanOrEqualTo(1));
+        }
+
+        // test for issue https://github.com/vis2k/Mirror/issues/2674
+        [Test]
+        public void CompressAndDecompressQuaternion_2674()
+        {
+            // we need a normalized value
+            Quaternion value = Quaternion.Euler(338.850037f, 170.609955f, 182.979996f).normalized;
+            Debug.Log($"original={value.eulerAngles}");
+
+            // compress
+            uint data = Compression.CompressQuaternion(value);
+
+            // decompress
+            Quaternion decompressed = Compression.DecompressQuaternion(data);
+
+            // compare them. Quaternion.Angle is easiest to get the angle
+            // between them. using .eulerAngles would give 0, 90, 360 which is
+            // hard to compare.
+
+            //  (51.6, 355.5, 348.1)
+            Debug.Log($"euler={decompressed.eulerAngles}");
             float angle = Quaternion.Angle(value, decompressed);
             // 1 degree tolerance
             Assert.That(Mathf.Abs(angle), Is.LessThanOrEqualTo(1));
@@ -105,31 +178,6 @@ namespace Mirror.Tests
             // 0xFFFFFFFF will decompress to (0.7, 0.7, 0.7, NaN)
             Quaternion decompressed = Compression.DecompressQuaternion(0xFFFFFFFF);
             Assert.That(decompressed, Is.EqualTo(Quaternion.identity));
-        }
-
-        // test for issue https://github.com/vis2k/Mirror/issues/2674
-        [Test, Ignore("TODO")]
-        public void CompressAndDecompressQuaternion_2674()
-        {
-            // we need a normalized value
-            Quaternion value = Quaternion.Euler(338.850037f, 170.609955f, 182.979996f).normalized;
-            Debug.Log("immediate=" + value.eulerAngles);
-
-            // compress
-            uint data = Compression.CompressQuaternion(value);
-
-            // decompress
-            Quaternion decompressed = Compression.DecompressQuaternion(data);
-
-            // compare them. Quaternion.Angle is easiest to get the angle
-            // between them. using .eulerAngles would give 0, 90, 360 which is
-            // hard to compare.
-
-            //  (51.6, 355.5, 348.1)
-            Debug.Log("euler=" + decompressed.eulerAngles);
-            float angle = Quaternion.Angle(value, decompressed);
-            // 1 degree tolerance
-            Assert.That(Mathf.Abs(angle), Is.LessThanOrEqualTo(1));
         }
 
         [Test]
@@ -182,7 +230,7 @@ namespace Mirror.Tests
             Assert.That(Compression.DecompressVarUInt(reader), Is.EqualTo(281474976710655));
             Assert.That(Compression.DecompressVarUInt(reader), Is.EqualTo(72057594037927935));
             Assert.That(Compression.DecompressVarUInt(reader), Is.EqualTo(ulong.MaxValue));
-            
+
             Assert.That(Compression.DecompressVarInt(reader), Is.EqualTo(long.MinValue));
             Assert.That(Compression.DecompressVarInt(reader), Is.EqualTo(-72057594037927935));
             Assert.That(Compression.DecompressVarInt(reader), Is.EqualTo(-281474976710655));

@@ -5,13 +5,12 @@ namespace Mirror.Weaver
 {
     public static class SyncObjectProcessor
     {
-        /// <summary>
-        /// Finds SyncObjects fields in a type
-        /// <para>Type should be a NetworkBehaviour</para>
-        /// </summary>
-        /// <param name="td"></param>
-        /// <returns></returns>
-        public static List<FieldDefinition> FindSyncObjectsFields(TypeDefinition td)
+        // ulong = 64 bytes
+        const int SyncObjectsLimit = 64;
+
+        // Finds SyncObjects fields in a type
+        // Type should be a NetworkBehaviour
+        public static List<FieldDefinition> FindSyncObjectsFields(Writers writers, Readers readers, Logger Log, TypeDefinition td, ref bool WeavingFailed)
         {
             List<FieldDefinition> syncObjects = new List<FieldDefinition>();
 
@@ -21,26 +20,30 @@ namespace Mirror.Weaver
                 {
                     if (fd.IsStatic)
                     {
-                        Weaver.Error($"{fd.Name} cannot be static", fd);
+                        Log.Error($"{fd.Name} cannot be static", fd);
+                        WeavingFailed = true;
                         continue;
                     }
 
-                    GenerateReadersAndWriters(fd.FieldType);
+                    GenerateReadersAndWriters(writers, readers, fd.FieldType, ref WeavingFailed);
 
                     syncObjects.Add(fd);
                 }
+            }
+
+            // SyncObjects dirty mask is 64 bit. can't sync more than 64.
+            if (syncObjects.Count > 64)
+            {
+                Log.Error($"{td.Name} has > {SyncObjectsLimit} SyncObjects (SyncLists etc). Consider refactoring your class into multiple components", td);
+                WeavingFailed = true;
             }
 
 
             return syncObjects;
         }
 
-        /// <summary>
-        /// Generates serialization methods for synclists
-        /// </summary>
-        /// <param name="td">The synclist class</param>
-        /// <param name="mirrorBaseType">the base SyncObject td inherits from</param>
-        static void GenerateReadersAndWriters(TypeReference tr)
+        // Generates serialization methods for synclists
+        static void GenerateReadersAndWriters(Writers writers, Readers readers, TypeReference tr, ref bool WeavingFailed)
         {
             if (tr is GenericInstanceType genericInstance)
             {
@@ -48,15 +51,15 @@ namespace Mirror.Weaver
                 {
                     if (!argument.IsGenericParameter)
                     {
-                        Readers.GetReadFunc(argument);
-                        Writers.GetWriteFunc(argument);
+                        readers.GetReadFunc(argument, ref WeavingFailed);
+                        writers.GetWriteFunc(argument, ref WeavingFailed);
                     }
                 }
             }
 
             if (tr != null)
             {
-                GenerateReadersAndWriters(tr.Resolve().BaseType);
+                GenerateReadersAndWriters(writers, readers, tr.Resolve().BaseType, ref WeavingFailed);
             }
         }
     }
