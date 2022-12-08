@@ -9,13 +9,16 @@
         "Telepathy",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
-        "Unity.Mirror.CodeGen"
+        "Unity.Mirror.CodeGen",
+        "WeaverTestExtraAssembly",
+        "MultiplexTransport",
+        "MiddlewareTransport"
     ],
     "includePlatforms": [
         "Editor"
     ],
     "excludePlatforms": [],
-    "allowUnsafeCode": false,
+    "allowUnsafeCode": true,
     "overrideReferences": true,
     "precompiledReferences": [
         "NSubstitute.dll",

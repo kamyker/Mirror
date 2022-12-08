@@ -5,10 +5,10 @@ namespace Mirror.Tests
     class NetworkManagerOnServerDisconnect : NetworkManager
     {
         public int called;
-        public override void OnServerDisconnect(NetworkConnection conn)
+        public override void OnServerDisconnect(NetworkConnectionToClient conn)
         {
             base.OnServerDisconnect(conn);
-            ++called; 
+            ++called;
         }
 }
 
@@ -22,6 +22,7 @@ namespace Mirror.Tests
         {
             base.SetUp();
             manager = transport.gameObject.AddComponent<NetworkManagerOnServerDisconnect>();
+            manager.transport = transport;
         }
 
         // test to prevent https://github.com/vis2k/Mirror/issues/1515

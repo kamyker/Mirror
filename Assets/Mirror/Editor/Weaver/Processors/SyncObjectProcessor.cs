@@ -16,13 +16,37 @@ namespace Mirror.Weaver
 
             foreach (FieldDefinition fd in td.Fields)
             {
-                if (fd.FieldType.Resolve().ImplementsInterface<SyncObject>())
+                if (fd.FieldType.IsGenericParameter)
+                {
+                    // can't call .Resolve on generic ones
+                    continue;
+                }
+
+                if (fd.FieldType.Resolve().IsDerivedFrom<SyncObject>())
                 {
                     if (fd.IsStatic)
                     {
                         Log.Error($"{fd.Name} cannot be static", fd);
                         WeavingFailed = true;
                         continue;
+                    }
+
+                    // SyncObjects always needs to be readonly to guarantee.
+                    // Weaver calls InitSyncObject on them for dirty bits etc.
+                    // Reassigning at runtime would cause undefined behaviour.
+                    // (C# 'readonly' is called 'initonly' in IL code.)
+                    //
+                    // NOTE: instead of forcing readonly, we could also scan all
+                    //       instructions for SyncObject assignments. this would
+                    //       make unit tests very difficult though.
+                    if (!fd.IsInitOnly)
+                    {
+                        // just a warning for now.
+                        // many people might still use non-readonly SyncObjects.
+                        Log.Warning($"{fd.Name} should have a 'readonly' keyword in front of the variable because {typeof(SyncObject)}s always need to be initialized by the Weaver.", fd);
+
+                        // only log, but keep weaving. no need to break projects.
+                        //WeavingFailed = true;
                     }
 
                     GenerateReadersAndWriters(writers, readers, fd.FieldType, ref WeavingFailed);

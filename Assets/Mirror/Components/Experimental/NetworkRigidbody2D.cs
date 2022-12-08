@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Mirror.Experimental
 {
-    [AddComponentMenu("Network/Experimental/NetworkRigidbody2D")]
+    [AddComponentMenu("Network/ Experimental/Network Rigidbody 2D")]
     public class NetworkRigidbody2D : NetworkBehaviour
     {
         [Header("Settings")]
@@ -73,7 +73,7 @@ namespace Mirror.Experimental
         /// <returns></returns>
         bool IgnoreSync => isServer || ClientWithAuthority;
 
-        bool ClientWithAuthority => clientAuthority && hasAuthority;
+        bool ClientWithAuthority => clientAuthority && isOwned;
 
         void OnVelocityChanged(Vector2 _, Vector2 newValue)
         {
@@ -190,7 +190,7 @@ namespace Mirror.Experimental
         [Client]
         void SendToServer()
         {
-            if (!hasAuthority)
+            if (!isOwned)
             {
                 Debug.LogWarning("SendToServer called without authority");
                 return;

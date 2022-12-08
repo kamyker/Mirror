@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using Mirror.Tests.RemoteAttrributeTest;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace Mirror.Tests
 {
@@ -17,7 +20,7 @@ namespace Mirror.Tests
 
             // start server & connect client because we need spawn functions
             NetworkServer.Listen(1);
-            ConnectHostClientBlockingAuthenticatedAndReady();
+            ConnectClientBlockingAuthenticatedAndReady(out _);
         }
 
         /* uncomment if needed. commented for faster test workflow. this takes >3s.
@@ -34,6 +37,54 @@ namespace Mirror.Tests
             }
         }
         */
+
+        // Write/ReadBlittable assumes same endianness on server & client.
+        [Test]
+        public void LittleEndianPlatform()
+        {
+            Assert.That(BitConverter.IsLittleEndian, Is.True);
+        }
+
+        [Test]
+        public void ToStringTest()
+        {
+            NetworkWriter writer = new NetworkWriter();
+
+            writer.WriteUInt(0xAABBCCDD);
+            writer.WriteByte(0xFF);
+            // should show [content, position / capacity].
+            // showing "position / space] is too confusing.
+            Assert.That(writer.ToString(), Is.EqualTo($"[DD-CC-BB-AA-FF @ 5/{NetworkWriter.DefaultCapacity}]"));
+        }
+
+        [Test]
+        public void SegmentImplicit()
+        {
+            NetworkWriter writer = new NetworkWriter();
+
+            writer.WriteUInt(0xAABBCCDD);
+            writer.WriteByte(0xFF);
+            ArraySegment<byte> segment = writer;
+            Assert.That(segment.SequenceEqual(new byte[] {0xDD, 0xCC, 0xBB, 0xAA, 0xFF}));
+        }
+
+        // some platforms may not support unaligned *(T*) reads/writes.
+        // but it still needs to work with our workaround.
+        // let's have an editor test to maybe catch it early.
+        // Editor runs Win/Mac/Linux and atm the issue only exists on Android,
+        // but let's have a test anyway.
+        // see also: https://github.com/vis2k/Mirror/issues/3044
+        [Test]
+        public void WriteUnaligned()
+        {
+            NetworkWriter writer = new NetworkWriter();
+            // make unaligned
+            writer.WriteByte(0xFF);
+            // write a double
+            writer.WriteDouble(Math.PI);
+            // should have written 9 bytes without throwing exceptions
+            Assert.That(writer.Position, Is.EqualTo(9));
+        }
 
         [Test]
         public void TestWritingSmallMessage()
@@ -80,6 +131,22 @@ namespace Mirror.Tests
             Assert.That(deserialized.Count, Is.EqualTo(data.Length));
             for (int i = 0; i < data.Length; ++i)
                 Assert.That(deserialized.Array[deserialized.Offset + i], Is.EqualTo(data[i]));
+        }
+
+        [Test]
+        public unsafe void WriteBytes_Ptr()
+        {
+            NetworkWriter writer = new NetworkWriter();
+
+            // make sure this respects position & offset
+            writer.WriteByte(0xFF);
+
+            byte[] bytes = {0x01, 0x02, 0x03, 0x04};
+            fixed (byte* ptr = bytes)
+            {
+                Assert.True(writer.WriteBytes(ptr, 1, 2));
+                Assert.True(writer.ToArraySegment().SequenceEqual(new byte[] {0xFF, 0x02, 0x03}));
+            }
         }
 
         // write byte[], read segment
@@ -207,6 +274,81 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestBool()
+        {
+            bool[] inputs = { true, false };
+            foreach (bool input in inputs)
+            {
+                NetworkWriter writer = new NetworkWriter();
+                writer.WriteBool(input);
+                NetworkReader reader = new NetworkReader(writer.ToArray());
+                bool output = reader.ReadBool();
+                Assert.That(output, Is.EqualTo(input));
+            }
+        }
+
+        [Test]
+        public void TestBoolNullable()
+        {
+            bool? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteBoolNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            bool? output = reader.ReadBoolNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
+        public void TestByte()
+        {
+            byte[] inputs = { 1, 2, 3, 4 };
+            foreach (byte input in inputs)
+            {
+                NetworkWriter writer = new NetworkWriter();
+                writer.WriteByte(input);
+                NetworkReader reader = new NetworkReader(writer.ToArray());
+                byte output = reader.ReadByte();
+                Assert.That(output, Is.EqualTo(input));
+            }
+        }
+
+        [Test]
+        public void TestByteNullable()
+        {
+            byte? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteByteNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            byte? output = reader.ReadByteNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
+        public void TestSByte()
+        {
+            sbyte[] inputs = { 1, 2, 3, 4 };
+            foreach (sbyte input in inputs)
+            {
+                NetworkWriter writer = new NetworkWriter();
+                writer.WriteSByte(input);
+                NetworkReader reader = new NetworkReader(writer.ToArray());
+                sbyte output = reader.ReadSByte();
+                Assert.That(output, Is.EqualTo(input));
+            }
+        }
+
+        [Test]
+        public void TestSByteNullable()
+        {
+            sbyte? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteSByteNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            sbyte? output = reader.ReadSByteNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestVector2()
         {
             Vector2[] inputs = {
@@ -225,6 +367,17 @@ namespace Mirror.Tests
                 Vector2 output = reader.ReadVector2();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestVector2Nullable()
+        {
+            Vector2? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteVector2Nullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Vector2? output = reader.ReadVector2Nullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -250,6 +403,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestVector3Nullable()
+        {
+            Vector3? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteVector3Nullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Vector3? output = reader.ReadVector3Nullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestVector4()
         {
             Vector4[] inputs = {
@@ -268,6 +432,17 @@ namespace Mirror.Tests
                 Vector4 output = reader.ReadVector4();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestVector4Nullable()
+        {
+            Vector4? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteVector4Nullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Vector4? output = reader.ReadVector4Nullable();
+            Assert.That(output, Is.EqualTo(output));
         }
 
         [Test]
@@ -290,6 +465,17 @@ namespace Mirror.Tests
                 Vector2Int output = reader.ReadVector2Int();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestVector2IntNullable()
+        {
+            Vector2Int? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteVector2IntNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Vector2Int? output = reader.ReadVector2IntNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -316,6 +502,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestVector3IntNullable()
+        {
+            Vector3Int? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteVector3IntNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Vector3Int? output = reader.ReadVector3IntNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestColor()
         {
             Color[] inputs = {
@@ -335,6 +532,17 @@ namespace Mirror.Tests
                 Color output = reader.ReadColor();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestColorNullable()
+        {
+            Color? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteColorNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Color? output = reader.ReadColorNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -361,6 +569,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestColor32Nullable()
+        {
+            Color32? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteColor32Nullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Color32? output = reader.ReadColor32Nullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestQuaternion()
         {
             Quaternion[] inputs = {
@@ -377,6 +596,17 @@ namespace Mirror.Tests
                 Quaternion output = reader.ReadQuaternion();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestQuaternionNullable()
+        {
+            Quaternion? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteQuaternionNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Quaternion? output = reader.ReadQuaternionNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -397,6 +627,17 @@ namespace Mirror.Tests
                 Rect output = reader.ReadRect();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestRectNullable()
+        {
+            Rect? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteRectNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Rect? output = reader.ReadRectNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -423,6 +664,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestPlaneNullable()
+        {
+            Plane? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WritePlaneNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Plane? output = reader.ReadPlaneNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestRay()
         {
             Ray[] inputs = {
@@ -439,6 +691,17 @@ namespace Mirror.Tests
                 Assert.That((output.direction - input.direction).magnitude, Is.LessThan(1e-6f));
                 Assert.That(output.origin, Is.EqualTo(input.origin));
             }
+        }
+
+        [Test]
+        public void TestRayNullable()
+        {
+            Ray? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteRayNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Ray? output = reader.ReadRayNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -459,6 +722,17 @@ namespace Mirror.Tests
                 Matrix4x4 output = reader.ReadMatrix4x4();
                 Assert.That(output, Is.EqualTo(input));
             }
+        }
+
+        [Test]
+        public void TestMatrix4x4Nullable()
+        {
+            Matrix4x4? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteMatrix4x4Nullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Matrix4x4? output = reader.ReadMatrix4x4Nullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -550,6 +824,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestCharNullable()
+        {
+            char? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteCharNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            char? output = reader.ReadCharNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestUnicodeString()
         {
             string[] weirdUnicode = {
@@ -613,6 +898,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestGuidNullable()
+        {
+            Guid? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteGuidNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Guid? output = reader.ReadGuidNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestFloats()
         {
             float[] weirdFloats = {
@@ -641,6 +937,17 @@ namespace Mirror.Tests
                 float readFloat = reader.ReadFloat();
                 Assert.That(readFloat, Is.EqualTo(weird));
             }
+        }
+
+        [Test]
+        public void TestFloatNullable()
+        {
+            float? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteFloatNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            float? output = reader.ReadFloatNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -675,6 +982,17 @@ namespace Mirror.Tests
         }
 
         [Test]
+        public void TestDoubleNullable()
+        {
+            double? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteDoubleNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            double? output = reader.ReadDoubleNullable();
+            Assert.That(output, Is.EqualTo(input));
+        }
+
+        [Test]
         public void TestDecimals()
         {
             decimal[] weirdDecimals = {
@@ -693,6 +1011,17 @@ namespace Mirror.Tests
                 decimal readDecimal = reader.ReadDecimal();
                 Assert.That(readDecimal, Is.EqualTo(weird));
             }
+        }
+
+        [Test]
+        public void TestDecimalNullable()
+        {
+            decimal? input = null;
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteDecimalNullable(input);
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            decimal? output = reader.ReadDecimalNullable();
+            Assert.That(output, Is.EqualTo(input));
         }
 
         [Test]
@@ -859,6 +1188,24 @@ namespace Mirror.Tests
             Assert.That(writer.ToArray(), Is.EqualTo(expected));
         }
 
+        // test to avoid https://github.com/vis2k/Mirror/issues/3258
+        [Test]
+        public void WriteString_EnsuresCapacity()
+        {
+            NetworkWriter writer = new NetworkWriter();
+
+            // jump to near the end
+            int initialPosition = writer.Position;
+            writer.Position = writer.Capacity - 4;
+
+            // try to write a string
+            writer.WriteString("a test string");
+
+            // buffer should have resized without throwing any exceptions
+            Assert.That(writer.Position, Is.GreaterThan(initialPosition));
+        }
+
+
         [Test]
         public void TestWritingAndReading()
         {
@@ -1004,12 +1351,9 @@ namespace Mirror.Tests
             WriteBadArray();
 
             NetworkReader reader = new NetworkReader(writer.ToArray());
-            EndOfStreamException exception = Assert.Throws<EndOfStreamException>(() =>
-            {
+            Assert.Throws<EndOfStreamException>(() => {
                 _ = reader.ReadArray<int>();
             });
-            // todo improve this message check
-            Assert.That(exception, Has.Message.Contains($"ReadByte out of range"));
 
             void WriteBadArray()
             {
@@ -1052,7 +1396,8 @@ namespace Mirror.Tests
         public void TestNetworkBehaviour()
         {
             // create spawned because we will look up netId in .spawned
-            CreateNetworkedAndSpawn(out _, out _, out RpcNetworkIdentityBehaviour behaviour);
+            CreateNetworkedAndSpawn(out _, out _, out RpcNetworkIdentityBehaviour behaviour,
+                                    out _, out _, out _);
 
             NetworkWriter writer = new NetworkWriter();
             writer.WriteNetworkBehaviour(behaviour);
@@ -1083,12 +1428,43 @@ namespace Mirror.Tests
             Assert.That(reader.Position, Is.EqualTo(4), "should read 4 bytes when netid is 0");
         }
 
+        // test to prevent https://github.com/vis2k/Mirror/issues/2972
+        [Test]
+        public void TestNetworkBehaviourDoesntExistOnClient()
+        {
+            // create spawned because we will look up netId in .spawned
+            CreateNetworkedAndSpawn(out _, out _, out RpcNetworkIdentityBehaviour serverComponent,
+                                    out _, out _, out RpcNetworkIdentityBehaviour clientComponent);
+
+            // write on server where it's != null and exists
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteNetworkBehaviour(serverComponent);
+
+            byte[] bytes = writer.ToArray();
+            Assert.That(bytes.Length, Is.EqualTo(5), "Networkbehaviour should be 5 bytes long.");
+
+            // make it disappear / despawn on client
+            NetworkServer.spawned.Remove(serverComponent.netId);
+            NetworkClient.spawned.Remove(clientComponent.netId);
+
+            // reading should return null component
+            NetworkReader reader = new NetworkReader(bytes);
+            RpcNetworkIdentityBehaviour actual = reader.ReadNetworkBehaviour<RpcNetworkIdentityBehaviour>();
+            Assert.That(actual, Is.Null);
+
+            // IMPORTANT: should have read EXACTLY as much as was written.
+            // even if NetworkBehaviour wasn't found on client.
+            // otherwise data gets corrupted.
+            Assert.That(reader.Position, Is.EqualTo(writer.Position));
+        }
+
         [Test]
         [Description("Uses Generic read function to check weaver correctly creates it")]
         public void TestNetworkBehaviourWeaverGenerated()
         {
             // create spawned because we will look up netId in .spawned
-            CreateNetworkedAndSpawn(out _, out _, out RpcNetworkIdentityBehaviour behaviour);
+            CreateNetworkedAndSpawn(out _, out _, out RpcNetworkIdentityBehaviour behaviour,
+                                    out _, out _, out _);
 
             NetworkWriter writer = new NetworkWriter();
             writer.Write(behaviour);
@@ -1100,6 +1476,120 @@ namespace Mirror.Tests
             NetworkReader reader = new NetworkReader(bytes);
             RpcNetworkIdentityBehaviour actual = reader.Read<RpcNetworkIdentityBehaviour>();
             Assert.That(actual, Is.EqualTo(behaviour), "Read should find the same behaviour as written");
+        }
+
+        // test to make sure unspawned / prefab GameObjects can't be synced.
+        // they would be null on the other end, and it might not be obvious why.
+        // https://github.com/vis2k/Mirror/issues/2060
+        [Test]
+        public void TestWritingUnspawnedGameObject()
+        {
+            // create GO + NI, but unspawned
+            CreateNetworked(out GameObject go, out _);
+
+            // serializing in rpc/cmd/message should warn if unspawned.
+            LogAssert.Expect(LogType.Warning, new Regex("Attempted to serialize unspawned.*"));
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteGameObject(go);
+        }
+
+        // test to make sure unspawned / prefab GameObjects can't be synced.
+        // they would be null on the other end, and it might not be obvious why.
+        // https://github.com/vis2k/Mirror/issues/2060
+        [Test]
+        public void TestWritingUnspawnedNetworkIdentity()
+        {
+            // create GO + NI, but unspawned
+            CreateNetworked(out _, out NetworkIdentity identity);
+
+            // serializing in rpc/cmd/message should warn if unspawned.
+            LogAssert.Expect(LogType.Warning, new Regex("Attempted to serialize unspawned.*"));
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteNetworkIdentity(identity);
+        }
+
+        [Test]
+        public void WriteTexture2D_black()
+        {
+            // write
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteTexture2D(Texture2D.blackTexture);
+
+            // read
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Texture2D texture = reader.ReadTexture2D();
+
+            // compare
+            Assert.That(texture.width, Is.EqualTo(Texture2D.blackTexture.width));
+            Assert.That(texture.height, Is.EqualTo(Texture2D.blackTexture.height));
+            Assert.That(texture.GetPixels32().SequenceEqual(Texture2D.blackTexture.GetPixels32()));
+        }
+
+        [Test]
+        public void WriteTexture2D_normal()
+        {
+            // write
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteTexture2D(Texture2D.normalTexture);
+
+            // read
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Texture2D texture = reader.ReadTexture2D();
+
+            // compare
+            Assert.That(texture.width, Is.EqualTo(Texture2D.normalTexture.width));
+            Assert.That(texture.height, Is.EqualTo(Texture2D.normalTexture.height));
+            Assert.That(texture.GetPixels32().SequenceEqual(Texture2D.normalTexture.GetPixels32()));
+        }
+
+        // test to prevent https://github.com/vis2k/Mirror/issues/3144
+        [Test]
+        public void WriteTexture2D_Null()
+        {
+            // write
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteTexture2D(null);
+
+            // read
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Texture2D texture = reader.ReadTexture2D();
+            Assert.That(texture, Is.Null);
+        }
+
+        [Test]
+        public void WriteSprite_normal()
+        {
+            // create a test sprite
+            Sprite example = Sprite.Create(Texture2D.normalTexture, new Rect(1, 1, 2, 2), Vector2.zero);
+
+            // write
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteSprite(example);
+
+            // read
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Sprite sprite = reader.ReadSprite();
+
+            // compare
+            Assert.That(sprite.rect, Is.EqualTo(example.rect));
+            Assert.That(sprite.pivot, Is.EqualTo(example.pivot));
+            Assert.That(sprite.texture.width, Is.EqualTo(example.texture.width));
+            Assert.That(sprite.texture.height, Is.EqualTo(example.texture.height));
+            Assert.That(sprite.texture.GetPixels32().SequenceEqual(example.texture.GetPixels32()));
+        }
+
+        // test to prevent https://github.com/vis2k/Mirror/issues/3144
+        [Test]
+        public void WriteSprite_Null()
+        {
+            // write
+            NetworkWriter writer = new NetworkWriter();
+            writer.WriteSprite(null);
+
+            // read
+            NetworkReader reader = new NetworkReader(writer.ToArray());
+            Sprite sprite = reader.ReadSprite();
+            Assert.That(sprite, Is.Null);
         }
     }
 }
